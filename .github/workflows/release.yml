@@ -1,0 +1,81 @@
+# Builds PortBar.app and attaches it to a GitHub Release.
+#
+#   git tag v1.2.0 && git push origin v1.2.0   build and publish release v1.2.0
+#   Actions tab > Release > Run workflow       build only; the DMG is kept as a workflow artifact
+#
+# The app is ad-hoc signed and not notarized (no Apple Developer account), so users have to
+# approve it once in System Settings; the release notes say how.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      # Use the newest non-beta Xcode on the runner; build.sh needs Xcode 26+ for Icon Composer.
+      - name: Select Xcode
+        run: |
+          XCODE="$(ls -d /Applications/Xcode_*.app | grep -vi beta | sort -V | tail -1)"
+          echo "DEVELOPER_DIR=$XCODE/Contents/Developer" >> "$GITHUB_ENV"
+          DEVELOPER_DIR="$XCODE/Contents/Developer" xcodebuild -version
+
+      # v1.2.0 -> CFBundleShortVersionString 1.2.0; manual runs keep the version in Info.plist.
+      - name: Set version
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            plutil -replace CFBundleShortVersionString -string "${GITHUB_REF_NAME#v}" Resources/Info.plist
+          fi
+          plutil -replace CFBundleVersion -string "$GITHUB_RUN_NUMBER" Resources/Info.plist
+          echo "VERSION=$(plutil -extract CFBundleShortVersionString raw Resources/Info.plist)" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: ./build.sh
+
+      # A compressed DMG holding the app and an Applications shortcut, so installing is one drag.
+      - name: Package
+        run: |
+          DMG="build/PortBar-$VERSION.dmg"
+          STAGE=build/dmg; rm -rf "$STAGE"; mkdir -p "$STAGE"
+          ditto build/PortBar.app "$STAGE/PortBar.app"
+          ln -s /Applications "$STAGE/Applications"
+          hdiutil create -volname PortBar -srcfolder "$STAGE" -fs HFS+ -format UDZO -ov "$DMG"
+          echo "DMG=$DMG" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PortBar-${{ env.VERSION }}
+          path: ${{ env.DMG }}
+
+      - name: Publish release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > build/notes.md <<'EOF'
+          ## Install
+
+          1. Download **PortBar-${{ env.VERSION }}.dmg** below and open it.
+          2. Drag **PortBar.app** onto the Applications shortcut, eject the disk image, then open
+             PortBar from Applications.
+
+          PortBar isn't notarized by Apple, so macOS blocks it the first time:
+
+          - **macOS 15 Sequoia and later:** open System Settings > Privacy & Security, scroll down
+            and click **Open Anyway** next to the PortBar message, then confirm.
+          - **macOS 13 and 14:** right-click PortBar.app, choose **Open**, then click **Open**.
+
+          Or run `xattr -dr com.apple.quarantine /Applications/PortBar.app` in Terminal.
+
+          Requires macOS 13 or later on Apple silicon.
+          EOF
+          gh release create "$GITHUB_REF_NAME" "$DMG" --title "PortBar $VERSION" \
+            --notes-file build/notes.md --generate-notes
