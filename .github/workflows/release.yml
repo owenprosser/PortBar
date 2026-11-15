@@ -17,11 +17,11 @@ permissions:
 
 jobs:
   build:
-    runs-on: macos-26
+    runs-on: xcode-27
     steps:
       - uses: actions/checkout@v4
 
-      # Use the newest non-beta Xcode on the runner; build.sh needs Xcode 26+ for Icon Composer.
+      # Use the newest non-beta Xcode on the runner; build.sh needs Xcode 27+ (macOS 27 SDK, Icon Composer).
       - name: Select Xcode
         run: |
           XCODE="$(ls -d /Applications/Xcode_*.app | grep -vi beta | sort -V | tail -1)"
